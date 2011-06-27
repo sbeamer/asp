@@ -124,7 +124,7 @@ class ConvertAST(ast.NodeTransformer):
         return self.visit(node.body[0])
 
     def visit_Expr(self, node):
-        return Expression(self.visit(node.value))
+        return self.visit(node.value)
 
     # only single targets supported
     def visit_Assign(self, node):
@@ -154,7 +154,10 @@ class ConvertAST(ast.NodeTransformer):
                 return Call(CName("abs"), [self.visit(x) for x in node.args])
 
     def visit_Print(self, node):
-        text = str(self.visit(node.values[0])) if len(node.values) > 0 else ''
+        if len(node.values) > 0:
+            text = '<< ' + str(self.visit(node.values[0]))
+        else:
+           text = ''
         for fragment in node.values[1:]:
             text += ' << \" \" << ' + str(self.visit(fragment))
         return Print(text, node.nl)
