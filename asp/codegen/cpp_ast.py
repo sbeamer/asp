@@ -50,16 +50,16 @@ class CName(Generable):
         yield self.__str__()
 
 class Expression(Generable):
-    def __init__(self, expr):
-        self.expr = expr
+    def __init__(self):
         super(Expression, self).__init__()
-        self._fields = ['expr']
+        self._fields = []
+
 
     def __str__(self):
         return ""
 
     def generate(self, with_semicolon=True):
-        yield str(self.expr) + (';' if with_semicolon else '')
+        yield str(self) + (';' if with_semicolon else '')
 
 class BinOp(Expression):
     def __init__(self, left, op, right):
