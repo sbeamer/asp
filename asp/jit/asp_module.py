@@ -7,13 +7,24 @@ import sqlite3
 
 class ASPDB(object):
 
-    def __init__(self, specializer):
+    def __init__(self, specializer, persistent=False):
         """
         specializer must be specified so we avoid namespace collisions.
         """
         self.specializer = specializer
-        # currently creating an in-memory db, but eventually this should get written to disk
-        self.connection = sqlite3.connect(":memory:")
+
+        if persistent:
+            # create db file or load db
+            import tempfile, os
+            self.cache_dir = tempfile.gettempdir() + "/asp_cache"
+            if not os.access(self.cache_dir, os.F_OK):
+                os.mkdir(self.cache_dir)
+            self.db_file = self.cache_dir + "/aspdb.sqlite3"
+            self.connection = sqlite3.connect(self.db_file)
+        else:
+            self.db_file = None
+            self.connection = sqlite3.connect(":memory:")
+
 
     def create_specializer_table(self):
         self.connection.execute('create table '+self.specializer+' (fname text, variant text, key text, perf real)')
@@ -87,7 +98,21 @@ class ASPDB(object):
         self.connection.execute(query, (fname, variant, key))
         self.connection.commit()
 
-            
+    def destroy_db(self):
+        """
+        Delete the database.
+        """
+        if not self.db_file:
+            return True
+
+        import os
+        try:
+            self.close()
+            os.remove(self.db_file)
+        except:
+            return False
+        else:
+            return True
 
 
 class SpecializedFunction(object):
@@ -262,7 +287,8 @@ class ASPModule(object):
     """
 
     #FIXME: specializer should be required.
-    def __init__(self, specializer="default_specializer", cache_dir=None, use_cuda=False):
+    def __init__(self, specializer="default_specializer", cache_dir=None, use_cuda=False, use_cilk=False):
+            
         self.specialized_functions= {}
         self.helper_method_names = []
 
@@ -289,6 +315,10 @@ class ASPModule(object):
                                                codepy.toolchain.guess_nvcc_toolchain(),
                                                self.cache_dir)
             self.backends["cuda"].module.add_to_preamble([cpp_ast.Include('cuda.h', False)])
+
+        if use_cilk:
+            self.backends["cilk"] = self.backends["c++"]
+            self.backends["cilk"].toolchain.cc = "icc"
 
 
 
