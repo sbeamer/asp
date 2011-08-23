@@ -1,6 +1,13 @@
+"""Takes a StencilModel and interprets it (slowly) in Python.
+
+Facilitates isolation of bugs between stages in the specializer.
+"""
+
 from stencil_model import *
+from stencil_grid import distance
 import ast
 from assert_utils import *
+import math
 
 class StencilModelInterpreter(ast.NodeVisitor):
     def __init__(self, stencil_model, input_grids, output_grid):
@@ -31,9 +38,9 @@ class StencilModelInterpreter(ast.NodeVisitor):
 
     def visit_StencilNeighborIter(self, node):
         grid = self.visit(node.grid)
-        distance = self.visit(node.distance)
+        neighbors_id = self.visit(node.neighbors_id)
         self.current_neighbor_grid = grid
-        for x in grid.neighbors(self.current_output_point, distance):
+        for x in grid.neighbors(self.current_output_point, neighbors_id):
             self.current_neighbor_point = x
             for statement in node.body:
                 self.visit(statement)
@@ -55,6 +62,14 @@ class StencilModelInterpreter(ast.NodeVisitor):
         x = tuple(map(lambda a,b: a+b, list(self.current_output_point), node.offset_list))
         return grid[x]
 
+    def visit_InputElementZeroOffset(self, node):
+        grid = self.visit(node.grid)
+        return grid[self.current_output_point]
+
+    def visit_InputElementExprIndex(self, node):
+        grid = self.visit(node.grid)
+        return grid[self.visit(node.index)]
+
     def visit_ScalarBinOp(self, node):
         left = self.visit(node.left)
         right = self.visit(node.right)
@@ -68,3 +83,13 @@ class StencilModelInterpreter(ast.NodeVisitor):
             return left / right
         elif type(node.op) is ast.FloorDiv:
             return left // right
+
+    math_func_to_python_func = {'abs': abs, 'int': int}
+
+    def visit_MathFunction(self, node):
+        func = self.math_func_to_python_func[node.name]
+        args = map(self.visit, node.args)
+        return apply(func, args)
+
+    def visit_NeighborDistance(self, node):
+        return distance(self.current_neighbor_point, self.current_output_point)

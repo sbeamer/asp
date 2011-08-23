@@ -1,41 +1,53 @@
 
 from cpp_ast import *
+import cpp_ast
 import python_ast as ast
+import python_ast
 from asp.util import *
 
+def is_cpp_node(x):
+    return isinstance(x, Generable)    
 
-
-class NodeVisitor(ast.NodeVisitor):
-    """Unified class for visiting Python and C++ AST nodes, adapted from Python source."""
+class NodeVisitorCustomNodes(ast.NodeVisitor):
+    # Based on NodeTransformer.generic_visit(), but visits all sub-nodes
+    # matching is_node(), not just those derived from ast.AST. By default
+    # behaves just like ast.NodeTransformer, but is_node() can be overridden.
     def generic_visit(self, node):
-        """Called if no explicit visitor function exists for a node."""
         for field, value in ast.iter_fields(node):
             if isinstance(value, list):
                 for item in value:
-                    if isinstance(item, ast.AST) or isinstance(item, Generable):
+                    if self.is_node(item):
                         self.visit(item)
-            elif isinstance(value, ast.AST) or isinstance(value, Generable):
+            elif self.is_node(value):
                 self.visit(value)
 
+    def is_node(self, x):
+        return isinstance(x, ast.AST)
 
-class NodeTransformer(ast.NodeTransformer):
-    """Unified class for *transforming* Python and C++ AST nodes, adapted from Python source"""
+class NodeVisitor(NodeVisitorCustomNodes):
+    def is_node(self, x):
+        return isinstance(x, ast.AST) or is_cpp_node(x)
+
+class NodeTransformerCustomNodes(ast.NodeTransformer):
+    # Based on NodeTransformer.generic_visit(), but visits all sub-nodes
+    # matching is_node(), not just those derived from ast.AST. By default
+    # behaves just like ast.NodeTransformer, but is_node() can be overridden.
     def generic_visit(self, node):
-        for field, old_value in ast.iter_fields(node):
+        for field in node._fields:
             old_value = getattr(node, field, None)
             if isinstance(old_value, list):
                 new_values = []
                 for value in old_value:
-                    if isinstance(value, ast.AST) or isinstance(value, Generable):
+                    if self.is_node(value):
                         value = self.visit(value)
                         if value is None:
                             continue
-                        elif not (isinstance(value, ast.AST) or isinstance(value, Generable)):
+                        elif not self.is_node(value):
                             new_values.extend(value)
                             continue
                     new_values.append(value)
                 old_value[:] = new_values
-            elif isinstance(old_value, ast.AST) or isinstance(old_value, Generable):
+            elif self.is_node(old_value):
                 new_node = self.visit(old_value)
                 if new_node is None:
                     delattr(node, field)
@@ -43,9 +55,15 @@ class NodeTransformer(ast.NodeTransformer):
                     setattr(node, field, new_node)
         return node
 
+    def is_node(self, x):
+        return isinstance(x, ast.AST)
 
+class NodeTransformer(NodeTransformerCustomNodes):
+    """Unified class for *transforming* Python and C++ AST nodes"""
+    def is_node(self, x):
+        return isinstance(x, ast.AST) or is_cpp_node(x)
 
-class ASTNodeReplacer(ast.NodeTransformer):
+class ASTNodeReplacer(NodeTransformer):
     """Class to replace Python AST nodes."""
     def __init__(self, original, replacement):
         self.original = original
@@ -59,6 +77,7 @@ class ASTNodeReplacer(ast.NodeTransformer):
                 if field != 'ctx' and node.__getattribute__(field) != value:
                     debug_print( str(node.__getattribute__(field)) + " != " + str(value) )
                     eql = False
+                    break
 
         if eql:
             import copy
@@ -67,7 +86,9 @@ class ASTNodeReplacer(ast.NodeTransformer):
         else:
             return self.generic_visit(node)
 
-
+class ASTNodeReplacerCpp(ASTNodeReplacer):
+    def is_node(self, x):
+        return is_cpp_node(x)
 
 class ConvertAST(ast.NodeTransformer):
     """Class to convert from Python AST to C++ AST"""
@@ -129,8 +150,12 @@ class ConvertAST(ast.NodeTransformer):
 
     # only single targets supported
     def visit_Assign(self, node):
-        return Assign(self.visit(node.targets[0]),
-                self.visit(node.value))
+        if isinstance(node, python_ast.Assign):
+            return Assign(self.visit(node.targets[0]),
+                          self.visit(node.value))
+        elif isinstance(node, cpp_ast.Assign):
+            return Assign(self.visit(node.lvalue),
+                          self.visit(node.rvalue))
 
     def visit_FunctionDef(self, node):
         debug_print("In FunctionDef:")
@@ -179,6 +204,10 @@ class ConvertAST(ast.NodeTransformer):
         else:
             orelse = Block([self.visit(x) for x in node.orelse])
         return IfConv(test, body, orelse)
+
+    def visit_Return(self, node):
+        return ReturnStatement(self.visit(node.value))
+
 
 
 class LoopUnroller(object):
@@ -256,24 +285,17 @@ class LoopUnroller(object):
 
         import copy
 
-        #Number of iterations in the initial loop
-        num_iterations = node.end.num - node.initial.num + 1
-
-        #Integer division provides number of iterations
-        # in the unrolled loop
-        num_unrolls = num_iterations / factor
-
-        #Iterations left over after unrolled loop
-        leftover = num_iterations % factor
-
-        #End of unrolled loop, add one to get beginning of leftover loop
-        loop_end = CNumber(node.end.num - leftover)
-        leftover_begin = CNumber(node.end.num - leftover + 1)
-
-        debug_print("Loop unroller called with ", node.loopvar)
-        debug_print("Number of iterations: ", num_iterations)
-        debug_print("Number of unrolls: ", num_unrolls)
-        debug_print("Leftover iterations: ", leftover)
+        # we can't precalculate the number of leftover iterations in the case that
+        # the number of iterations are not known a priori, so we build an Expression
+        # and let the compiler deal with it
+        leftover_begin = BinOp(CNumber(factor),
+                               "*", 
+                               BinOp(BinOp(node.end, "+", 1), "/", CNumber(factor)))
+        
+#        debug_print("Loop unroller called with ", node.loopvar)
+#        debug_print("Number of iterations: ", num_iterations)
+#        debug_print("Number of unrolls: ", num_unrolls)
+#        debug_print("Leftover iterations: ", leftover)
 
         new_increment = BinOp(node.increment, "*", CNumber(factor))
 
@@ -288,7 +310,7 @@ class LoopUnroller(object):
         unrolled_for_node = For(
             node.loopvar,
             node.initial,
-            loop_end,
+            node.end,
             new_increment,
             new_block)
 
@@ -299,10 +321,97 @@ class LoopUnroller(object):
             node.increment,
             node.body)
 
+
         return_block.append(unrolled_for_node)
 
-        if leftover != 0:
+        # if we *know* this loop has no leftover iterations, then
+        # we return without the leftover loop
+        if not (isinstance(node.initial, CNumber) and isinstance(node.end, CNumber) and
+           ((node.end.num - node.initial.num + 1) % factor == 0)):
             return_block.append(leftover_for_node)
 
         return return_block
 
+
+class LoopBlocker(object):
+    def loop_block(self, node, block_size):
+        outer_incr_name = CName(node.loopvar + node.loopvar)
+
+        new_inner_for = For(
+            node.loopvar,
+            outer_incr_name,
+            FunctionCall("min", [BinOp(outer_incr_name, 
+                                       "+", 
+                                       CNumber(block_size-1)), 
+                                 node.end]),
+            CNumber(1),
+            node.body)
+
+        new_outer_for = For(
+            node.loopvar + node.loopvar,
+            node.initial,
+            node.end,
+            BinOp(node.increment, "*", CNumber(block_size)),
+            Block(contents=[new_inner_for]))
+        debug_print(new_outer_for)
+        return new_outer_for
+
+class LoopSwitcher(NodeTransformer):
+    """
+    Class that switches two loops.  The user is responsible for making sure the switching
+    is valid (i.e. that the code can still compile/run).  Given two integers i,j this
+    class switches the ith and jth loops encountered.
+    """
+
+    
+    def __init__(self):
+        self.current_loop = -1
+        self.saved_first_loop = None
+        self.saved_second_loop = None
+        super(LoopSwitcher, self).__init__()
+
+    def switch(self, tree, i, j):
+        """Switch the i'th and j'th loops in tree."""
+        self.first_target = min(i,j)
+        self.second_target = max(i,j)
+
+        self.original_ast = tree
+        
+        return self.visit(tree)
+
+    def visit_For(self, node):
+        self.current_loop += 1
+
+        debug_print("At loop %d, targets are %d and %d" % (self.current_loop, self.first_target, self.second_target))
+
+        if self.current_loop == self.first_target:
+            # save the loop
+            debug_print("Saving loop")
+            self.saved_first_loop = node
+            new_body = self.visit(node.body)
+            assert self.second_target < self.current_loop + 1, 'Tried to switch loops %d and %d but only %d loops available' % (self.first_target, self.second_target, self.current_loop + 1)
+            # replace with the second loop (which has now been saved)
+            return For(self.saved_second_loop.loopvar,
+                       self.saved_second_loop.initial,
+                       self.saved_second_loop.end,
+                       self.saved_second_loop.increment,
+                       new_body)
+
+
+        if self.current_loop == self.second_target:
+            # save this
+            self.saved_second_loop = node
+            # replace this
+            debug_print("replacing loop")
+            return For(self.saved_first_loop.loopvar,
+                       self.saved_first_loop.initial,
+                       self.saved_first_loop.end,
+                       self.saved_first_loop.increment,
+                       node.body)
+
+
+        return For(node.loopvar,
+                   node.initial,
+                   node.end,
+                   node.increment,
+                   self.visit(node.body))

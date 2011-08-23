@@ -1,4 +1,8 @@
+"""A two-dimension grid of numeric values, used for input and output to a stencil kernel.
+"""
+
 import numpy
+import math
 
 class StencilGrid(object):
 
@@ -70,11 +74,20 @@ class StencilGrid(object):
         return []
 
 
-    def neighbors(self, center, dist):
+    def neighbors(self, center, neighbors_id):
         """
-        Returns a list of neighbors that are at distance dist from the center
-        point.  Uses neighbor_definition to determine what the neighbors are.
+        Returns the list of neighbors with the given neighbors_id. By
+        default, IDs 0 and 1 give the list consisting of all
+        points at a distance of 0 and 1 from the center point,
+        respectively. Uses neighbor_definition to determine what the
+        neighbors are.
         """
         # return tuples for each neighbor
-        for neighbor in self.neighbor_definition[dist]:
+        for neighbor in self.neighbor_definition[neighbors_id]:
             yield tuple(map(lambda a,b: a+b, list(center), list(neighbor)))
+
+    def __repr__(self):
+        return self.data.__repr__()
+
+def distance(x,y):
+    return math.sqrt(sum([(x[i]-y[i])**2 for i in range(0,len(x))]))

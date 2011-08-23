@@ -1,6 +1,7 @@
 import unittest2 as unittest
 import ast
 from stencil_model import *
+from assert_utils import *
 
 class BasicTests(unittest.TestCase):
     def setUp(self):
@@ -32,6 +33,10 @@ class BasicTests(unittest.TestCase):
         StencilModel([], self.constant_kernel, self.constant_kernel)
         # Empty model, does nothing
         StencilModel([], self.empty_kernel, self.empty_kernel)
+
+    def test_stencil_model_bad_neighbor(self):
+        with self.assertRaises(AssertionError):
+            StencilModel([self.in_grid], Kernel([OutputAssignment(Neighbor())]), self.empty_kernel)
 
     def test_kernel_init(self):
         Kernel([self.neighbor_iter])
@@ -81,6 +86,7 @@ class BasicTests(unittest.TestCase):
         ScalarBinOp(self.output_element, ast.Mult(), self.neighbor)
         ScalarBinOp(self.output_element, ast.Div(), self.neighbor)
         ScalarBinOp(self.output_element, ast.FloorDiv(), self.neighbor)
+        ScalarBinOp(self.output_element, ast.Mod(), self.neighbor)
         for op in [ast.Mod, ast.Pow, ast.LShift, ast.RShift, ast.BitOr, ast.BitXor, ast.BitAnd]:
             with self.assertRaises(AssertionError):
                 ScalarBinOp(self.output_element, op, self.neighbor)

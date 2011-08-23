@@ -1,3 +1,10 @@
+"""Takes a Python AST and converts it to a corresponding StencilModel.
+
+Throws an exception if the input does not represent a valid stencil
+kernel program. This is the first stage of processing and is done only
+once when a stencil class is initialized.
+"""
+
 from stencil_model import *
 from assert_utils import *
 import ast
@@ -5,8 +12,7 @@ from asp.util import *
 
 # class to convert from Python AST to StencilModel
 class StencilPythonFrontEnd(ast.NodeTransformer):
-    def __init__(self, argdict):
-        self.argdict = argdict
+    def __init__(self):
         super(StencilPythonFrontEnd, self).__init__()
 
     def parse(self, ast):
@@ -66,12 +72,17 @@ class StencilPythonFrontEnd(ast.NodeTransformer):
                 body = map(self.visit, node.body)
                 self.neighbor_target = None
                 self.neigbor_grid_id = None
-                distance = self.visit(node.iter.args[1])
-                return StencilNeighborIter(Identifier(self.neighbor_grid_id), distance, body)
+                neighbors_id = self.visit(node.iter.args[1])
+                return StencilNeighborIter(Identifier(self.neighbor_grid_id), neighbors_id, body)
             else:
-                return node
+                assert False, 'Invalid call in For loop argument \'%s\', can only iterate over interior_points, boder_points, or neighbor_points of a grid' % node.iter.func.attr
         else:
-            return node
+            assert False, 'Unexpected For loop \'%s\', can only iterate over interior_points, boder_points, or neighbor_points of a grid' % node
+
+    def visit_AugAssign(self, node):
+        target = self.visit(node.target)
+        assert type(target) is OutputElement, 'Only assignments to current output element permitted'
+        return OutputAssignment(ScalarBinOp(OutputElement(), node.op, self.visit(node.value)))
 
     def visit_Assign(self, node):
         targets = map (self.visit, node.targets)
@@ -82,15 +93,33 @@ class StencilPythonFrontEnd(ast.NodeTransformer):
         if type(node.slice) is ast.Index:
             grid_id = self.visit(node.value)
             target = self.visit(node.slice.value)
-            if grid_id == self.neighbor_grid_id and target == self.neighbor_target:
-                return Neighbor()
-            elif grid_id == self.output_arg_id and target == self.kernel_target:
+            if grid_id == self.output_arg_id and target == self.kernel_target:
                 return OutputElement()
+            elif target == self.kernel_target:
+                return InputElementZeroOffset(Identifier(grid_id))
+            elif grid_id == self.neighbor_grid_id and target == self.neighbor_target:
+                return Neighbor()
+            elif isinstance(target, Expr):
+                return InputElementExprIndex(Identifier(grid_id), target)
+            else:
+                assert False, 'Unexpected subscript index \'%s\' on grid \'%s\'' % (target, grid_id)
         else:
-            return node
+            assert False, 'Unsupported subscript object \'%s\' on grid \'%s\'' % (node.slice, grid_id)
 
     def visit_BinOp(self, node):
         return ScalarBinOp(self.visit(node.left), node.op, self.visit(node.right))
 
     def visit_Num(self, node):
         return Constant(node.n)
+
+    def visit_Call(self, node):
+        assert isinstance(node.func, ast.Name), 'Cannot call expression'
+        if node.func.id == 'distance' and len(node.args) == 2:
+            if ((node.args[0].id == self.neighbor_target and node.args[1].id == self.kernel_target) or \
+                (node.args[0].id == self.kernel_target and node.args[1].id == self.neighbor_target)):
+                return NeighborDistance()
+            elif ((node.args[0].id == self.neighbor_target and node.args[1].id == self.neighbor_target) or \
+                  (node.args[0].id == self.kernel_target and node.args[1].id == self.kernel_target)):
+                return Constant(0)
+        else:
+            return MathFunction(node.func.id, map(self.visit, node.args))
